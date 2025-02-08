@@ -1,0 +1,183 @@
+---
+title: "Segmentation and Maximizing Profit with Supervised Learning Methods"
+author: "Fransesca , Valentin Barthel, Adrien Busché"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import Packages
+
+```{r carse, echo=FALSE}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(kohonen)
+library(caret)
+library(randomForest)
+library(pROC)
+library(glmnet)
+library(Hmisc)
+
+# Load the data
+data <- read.csv("marketing_campaign.csv", sep = ";")
+
+# Clean the data
+data_clean <- data %>% filter(complete.cases(.))
+
+# Convert Dt_Customer to a numeric feature (days since first acquisition)
+data_clean$Dt_Customer <- as.Date(data_clean$Dt_Customer, format = "%Y-%m-%d")
+data_clean$Days_Customer <- as.numeric(difftime(data_clean$Dt_Customer, min(data_clean$Dt_Customer), units = "days"))
+data_clean <- data_clean %>% select(-Dt_Customer)
+
+# Convert categorical variables
+data_clean$Education <- as.factor(data_clean$Education)
+data_clean$Marital_Status <- as.factor(data_clean$Marital_Status)
+data_clean$Response <- as.factor(data_clean$Response)
+```
+
+# Exploratory Data Analysis
+
+## Descriptive Statistics
+
+```{r pressure, echo=FALSE}
+summary(data_clean)
+
+```
+
+## Visualization of Response Distribution
+
+```{r pressure, echo=FALSE}
+ggplot(data_clean, aes(x = Response)) +
+  geom_bar(fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Response Distribution", x = "Response", y = "Count")
+
+```
+
+## Segmentation with Self-Organizing Maps (SOM)
+
+```{r pressure, echo=FALSE}
+# Normalize numeric data for SOM
+numeric_data <- data_clean %>%
+  select(Age = Year_Birth, Income, MntWines:MntGoldProds, NumDealsPurchases:NumWebVisitsMonth) %>%
+  scale()
+
+# Create SOM grid and train the model
+som_grid <- somgrid(xdim = 5, ydim = 5, topo = "hexagonal")
+som_model <- som(numeric_data, grid = som_grid, rlen = 100, alpha = c(0.05, 0.01))
+
+# Visualize SOM clusters
+plot(som_model, type = "codes")
+
+# Add clusters to the dataset
+som_clusters <- cutree(hclust(dist(som_model$codes[[1]])), k = 5)
+data_clean$Cluster <- as.factor(som_clusters[som_model$unit.classif])
+
+```
+
+# Model Training and Threshold Optimization
+
+## Data splitting
+
+```{r pressure, echo=FALSE}
+set.seed(123)
+train_index <- createDataPartition(data_clean$Response, p = 0.7, list = FALSE)
+train_data <- data_clean[train_index, ]
+test_data <- data_clean[-train_index, ]
+
+```
+
+## Logistic Regression with LASSO Regularization
+
+```{r pressure, echo=FALSE}
+# Prepare data for glmnet
+x_train <- model.matrix(Response ~ ., data = train_data)[, -1]
+y_train <- as.numeric(train_data$Response) - 1
+x_test <- model.matrix(Response ~ ., data = test_data)[, -1]
+
+# Train with LASSO
+lognet_model <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 1)
+lognet_pred <- predict(lognet_model, newx = x_test, type = "response", s = "lambda.min")
+```
+
+## Random Forest
+
+```{r pressure, echo=FALSE}
+rf_model <- randomForest(Response ~ ., data = train_data, ntree = 100)
+rf_pred <- predict(rf_model, test_data, type = "prob")[, 2]
+```
+
+## Threshold Optimization
+
+```{r pressure, echo=FALSE}
+# Function to calculate profit at a given threshold
+calculate_profit <- function(predictions, actual, threshold, cost_per_contact, revenue_per_response) {
+  predicted_positives <- predictions >= threshold
+  positives_correctly_predicted <- sum(predicted_positives & (actual == 1))
+  total_contacted <- sum(predicted_positives)
+  profit <- positives_correctly_predicted * revenue_per_response - total_contacted * cost_per_contact
+  return(profit)
+}
+
+# Define parameters
+cost_per_contact <- 3
+revenue_per_response <- 11
+thresholds <- seq(0.1, 0.9, length.out = 40)
+
+# Calculate profits for each threshold
+profits_log <- sapply(thresholds, calculate_profit, 
+                      predictions = lognet_pred, 
+                      actual = as.numeric(test_data$Response) - 1, 
+                      cost_per_contact = cost_per_contact, 
+                      revenue_per_response = revenue_per_response)
+
+profits_rf <- sapply(thresholds, calculate_profit, 
+                     predictions = rf_pred, 
+                     actual = as.numeric(test_data$Response) - 1, 
+                     cost_per_contact = cost_per_contact, 
+                     revenue_per_response = revenue_per_response)
+
+# Find optimal thresholds
+optimal_threshold_log <- thresholds[which.max(profits_log)]
+optimal_profit_log <- max(profits_log)
+
+optimal_threshold_rf <- thresholds[which.max(profits_rf)]
+optimal_profit_rf <- max(profits_rf)
+
+cat("Logistic Regression: Optimal Threshold =", optimal_threshold_log, "with Profit =", optimal_profit_log, "\n")
+cat("Random Forest: Optimal Threshold =", optimal_threshold_rf, "with Profit =", optimal_profit_rf, "\n")
+
+```
+
+## Confusion Matrices
+
+```{r pressure, echo=FALSE}
+# Final predictions based on optimal thresholds
+lognet_class <- ifelse(lognet_pred >= optimal_threshold_log, 1, 0)
+rf_class <- ifelse(rf_pred >= optimal_threshold_rf, 1, 0)
+
+# Confusion matrices
+confusion_matrix_log <- table(Predicted = lognet_class, Actual = as.numeric(test_data$Response) - 1)
+confusion_matrix_rf <- table(Predicted = rf_class, Actual = as.numeric(test_data$Response) - 1)
+
+cat("Confusion Matrix - Logistic Regression:\n")
+print(confusion_matrix_log)
+
+cat("\nConfusion Matrix - Random Forest:\n")
+print(confusion_matrix_rf)
+
+```
+
+## Visualization of Profits by Threshold
+
+```{r pressure, echo=FALSE}
+plot(thresholds, profits_log, type = "l", col = "blue", lwd = 2, 
+     xlab = "Threshold", ylab = "Profit", main = "Profit vs Threshold")
+lines(thresholds, profits_rf, col = "red", lwd = 2)
+legend("bottomright", legend = c("Logistic Regression", "Random Forest"),
+       col = c("blue", "red"), lwd = 2)
+
+```
