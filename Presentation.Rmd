@@ -1,6 +1,6 @@
 ---
 title: "Segmentation and Maximizing Profit with Supervised Learning Methods"
-author: "Fransesca , Valentin Barthel, Adrien Busché"
+author: "Valentin Barthel, Adrien Busché, Francesca Vasta"
 output: html_document
 ---
 
